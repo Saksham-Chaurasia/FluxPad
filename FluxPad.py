@@ -508,13 +508,41 @@ class App:
         if not self.is_docked: self.settings["geometry"] = self.root.geometry()
         self.settings.update({"timeout": self.timeout, "use_glass": self.use_glass, "hide_on_type": self.hide_on_type})
         with open(CONFIG_FILE, 'w') as f: json.dump(self.settings, f)
-
+    
     def quit_app(self, *args):
+        # 1. Save settings
         self.save_config()
         self.stop_threads = True
-        self.tray.stop()
-        self.root.quit()
+
+        # 2. Unhook the global keyboard listener (CRITICAL)
+        # The 'keyboard' library hooks often keep the process alive in compiled apps
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
+
+        # 3. Stop the system tray icon
+        try:
+            self.tray.stop()
+        except:
+            pass
+
+        # 4. Destroy the GUI elements
+        try:
+            self.root.quit()    # Stops mainloop
+            self.root.destroy() # Destroys window
+        except:
+            pass
+
+        # 5. FORCE KILL (The most important part for installed apps)
+        # This forces Windows to terminate the process immediately, cleaning up
+        # any stuck COM objects or threads.
+        import os
+        os._exit(0)
 
 if __name__ == "__main__":
     app = App()
-    app.root.mainloop()
+    try:
+        app.root.mainloop()
+    except KeyboardInterrupt:
+        app.quit_app()
