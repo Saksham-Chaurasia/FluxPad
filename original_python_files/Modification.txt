@@ -1,0 +1,39 @@
+1. Install icon
+3. Give the option of fixed position of a dock in side screen top left a not at the corner.
+5. a proper keyboard as well but in different design not like a keyboard, so anyone can far easily click on it without coming close enough and recommendation as proper mobile keyboard works
+. like emojis and alphabet but numpad still has it priority to show.
+6. 
+
+### new thinking, 
+
+1. Make it lively, like it's talking to you. Like a iphone top black screen. 
+
+### better 
+
+1. make a smart docker which changes it's functionality with respect to the use
+
+such as if i had to fill a pin code of numbers, it becomes numpad, if i'm filling a password or something it becomes keyboard, 
+if i'm playing video on youtube or anywhere, it becomes a player, 
+if i'm calling from anywhere, whatsapp teams, it shows it's functionality. 
+...
+...
+
+pyinstaller --noconsole --onefile flux_2.py
+
+PyInstaller --noconsole --onefile --name "FluxPad" FluxPad.py
+
+pyinstaller --noconsole --onefile --name "FluxPad" --add-data "icon;icon" FluxPad.py
+
+
+-------------first task to resolve the issues-----------
+
+Image not coming, inno setup is not actually setting, alphabet is not working accurately.
+
+1. needs to work on after clicking on one alphabet that one is instantly get docked. 
+2. no images are coming.
+3. i should have put a text display which same as marker (like ding dong) what i'm typing actually. 
+4. should work even on the lock screen. 
+5. start up  time as well. 
+6. remove glossy theme. for now. 
+7. it should know what display i'm opening. at a time i should be able to type the same thing two/three places. when i want (chatgpt/gemini)
+8. double click at the center scroll bar, should make it to expand automatically. 
