@@ -26,14 +26,9 @@ pyinstaller --noconsole --onefile --name "FluxPad" --add-data "icon;icon" FluxPa
 
 
 -------------first task to resolve the issues-----------
+1. first time run, the dock should open it's default dock position. 
 
-Image not coming, inno setup is not actually setting, alphabet is not working accurately.
-
-1. needs to work on after clicking on one alphabet that one is instantly get docked. 
-2. no images are coming.
 3. i should have put a text display which same as marker (like ding dong) what i'm typing actually. 
 4. should work even on the lock screen. 
-5. start up  time as well. 
-6. remove glossy theme. for now. 
 7. it should know what display i'm opening. at a time i should be able to type the same thing two/three places. when i want (chatgpt/gemini)
 8. double click at the center scroll bar, should make it to expand automatically. 

@@ -34,6 +34,10 @@ class App:
         self.caps_active = False
         self.letter_buttons = []
         self.settings = config.load_config()
+        # --- NEW: Track what is being typed ---
+        self.current_text = "" 
+        self.cursor_on = True
+        self.stop_threads = False
         
         # --- MEMORY FOR WINDOW SIZES ---
         start_geo = self.settings.get("geometry", f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200")
@@ -62,7 +66,7 @@ class App:
         self.setup_context_menu()
         
         self.root.after(100, self.dock_window)
-        self.stop_threads = False
+        
         
         # Default to True if the setting doesn't exist (First Run), otherwise respect user config
         if self.settings.get("run_on_startup", True):
@@ -103,13 +107,13 @@ class App:
         self.bind_drag(title)
         self.bind_drag(self.title_bar)
 
-        close_btn = tk.Label(self.title_bar, text="✕", bg=config.TITLE_BG, fg="#aaaaaa", font=("Arial", 9), cursor="hand2")
+        close_btn = tk.Label(self.title_bar, text="━", bg=config.TITLE_BG, fg="#aaaaaa", font=("Arial", 9), cursor="hand2")
         close_btn.pack(side="right", padx=10, fill='y')
         close_btn.bind("<Button-1>", lambda e: self.dock_window())
         close_btn.bind("<Enter>", lambda e: close_btn.config(fg="white"))
         close_btn.bind("<Leave>", lambda e: close_btn.config(fg="#aaaaaa"))
 
-        # --- STEP 1: LOAD IMAGES ---
+        # Load Images (Same as before)
         try:
             def load_and_process(path, size=(22, 22)):
                 full_path = resource_path(path)
@@ -127,7 +131,8 @@ class App:
                     img = img.resize(size, Image.Resampling.LANCZOS)
                     return ImageTk.PhotoImage(img)
                 except: return None
-
+            
+            # ... (Your existing image loading code here) ...
             self.play_icon_img = load_and_process("icon/play.png")
             self.pause_icon_img = load_and_process("icon/pause.png")
             self.vol_down_img = load_and_process("icon/volumedown.png")
@@ -186,12 +191,28 @@ class App:
         content = tk.Frame(self.main_frame, bg=config.BG_COLOR)
         content.pack(expand=True, fill="both", padx=8, pady=5)
 
+        # --- NEW: Typing Display Area ---
+        self.display_frame = tk.Frame(content, bg="#1e1e1e", height=35)
+        self.display_frame.pack(fill="x", pady=(0, 8))
+        self.display_frame.pack_propagate(False)
+        self.display_frame.configure(highlightbackground="#333333", highlightthickness=1)
+        import tkinter.font as tkfont
+        self.display_font = tkfont.Font(family="Consolas", size=14)
+        # anchor='w' keeps text on the left, like a text editor
+        self.cursor_label = tk.Label(self.display_frame, text="|", bg="#1e1e1e", fg="white", font=("Consolas", 14), anchor='w')
+        self.cursor_label.pack(side="left", fill='x', expand=True, padx=8)
+        
+        # Start blinking loop
+        self.blink_cursor()
+        # --------------------------------
+
         self.media_frame = tk.Frame(content, bg=config.BG_COLOR)
         self.media_frame.pack(fill="x", pady=(0, 10))
         self.media_frame.bind("<MouseWheel>", self.on_mouse_scroll)
 
         self.is_playing = False 
-
+        
+        # ... (Rest of setup_ui logic for media buttons matches your existing code) ...
         def toggle_media():
             self.virtual_key_action('playpause')
             self.is_playing = not self.is_playing
@@ -222,7 +243,8 @@ class App:
         self.keys_container = tk.Frame(content, bg=config.BG_COLOR)
         self.keys_container.pack(expand=True, fill="both")
         self.build_numpad()
-
+        
+        # ... (Remaining mouse bindings) ...
         def get_play_btn_text(): return "Pause" if self.is_playing else "Play"
         if hasattr(self, 'play_btn'): self.play_tooltip = ToolTip(self.play_btn, get_play_btn_text)
         self.root.bind("<MouseWheel>", self.on_mouse_scroll)
@@ -378,8 +400,18 @@ class App:
                     self.shift_active = False
                     self.update_keyboard_visuals()
             else: final_char = char.lower()
+        
+        # 1. Update the display immediately
+        self.process_key_for_display(final_char) 
+        
+        # 2. Tell the listener to IGNORE the next keypress (The Echo)
+        self.ignore_next_keypress = True 
+        
         try: pyautogui.write(final_char)
         except: pass
+        
+        # 3. Stop ignoring after a tiny delay
+        self.root.after(100, lambda: setattr(self, 'ignore_next_keypress', False))
 
     def toggle_shift(self):
         self.shift_active = not self.shift_active
@@ -393,8 +425,17 @@ class App:
 
     def virtual_key_action_text(self, text):
         self.last_interaction = time.time()
+        
+        # Update display
+        for char in text: self.process_key_for_display(char) 
+        
+        # Ignore the echo
+        self.ignore_next_keypress = True 
+        
         try: pyautogui.write(text)
         except: pass
+        
+        self.root.after(100, lambda: setattr(self, 'ignore_next_keypress', False))
 
     def on_mouse_scroll(self, event):
         try:
@@ -439,9 +480,15 @@ class App:
         if self.root.state() == 'withdrawn': return
         if self.hide_on_type and not self.is_docked:
             self.root.after(0, self.dock_window)
+        
+        # --- UPDATE DISPLAY (For physical typing) ---
+        # We use root.after to ensure thread safety with tkinter
+        self.root.after(0, lambda: self.process_key_for_display(event.name))
 
     def virtual_key_action(self, key):
         self.last_interaction = time.time()
+        # --- UPDATE DISPLAY ---
+        self.process_key_for_display(key)
         self.ignore_next_keypress = True 
         try: pyautogui.press(key)
         except: pass
@@ -579,6 +626,8 @@ class App:
         if new_w > config.MIN_WIDTH and new_h > config.MIN_HEIGHT:
             self.root.geometry(f"{new_w}x{new_h}")
             self.root.update_idletasks()
+            self.update_display()
+
     def stop_resize(self, e): self.save_config()
 
     def set_timeout(self, seconds): self.timeout = seconds; self.save_config()
@@ -630,6 +679,50 @@ class App:
         self.root.after(10, self.root.lift)
         self.root.after(20, lambda: self.dock_window(animate=False))
         self.root.after(50, self.vibrate_eye_catch)
+
+    # --- NEW METHODS FOR DISPLAY ---
+    def update_display(self):
+        """ Updates the label with Current Text + Cursor, handling alignment """
+        # FIX FOR DANCING NUMBERS: Use space instead of empty string so width is constant
+        cursor_char = "|" if self.cursor_on else " "
+        full_text = self.current_text + cursor_char
+        
+        # Smart Alignment:
+        # Measure text width. If wider than box -> Align Right. Else -> Align Left.
+        try:
+            text_width = self.display_font.measure(full_text)
+            label_width = self.cursor_label.winfo_width()
+            
+            if text_width > label_width - 20: 
+                self.cursor_label.config(anchor='e')
+            else:
+                self.cursor_label.config(anchor='w')
+
+            self.cursor_label.config(text=full_text)
+        except: pass
+
+    def blink_cursor(self):
+        """ Toggles cursor visibility every 500ms """
+        if self.stop_threads: return
+        self.cursor_on = not self.cursor_on
+        self.update_display()
+        self.root.after(500, self.blink_cursor)
+
+    def process_key_for_display(self, key_name):
+        """ Logic to update text based on key press """
+        if key_name == 'backspace':
+            self.current_text = self.current_text[:-1]
+        elif key_name == 'space':
+            self.current_text += " "
+        elif key_name == 'enter':
+            self.current_text = "" # Clear on enter
+        elif len(key_name) == 1:
+            self.current_text += key_name
+        
+        # Force cursor visible immediately when typing
+        self.cursor_on = True 
+        self.update_display()
+    # -------------------------------
 
     def vibrate_eye_catch(self):
         orig_geo = self.root.geometry()
