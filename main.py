@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageTk, ImageOps
 
 # --- Custom Module Imports ---
 import config
-from window_utils import resource_path, apply_rounded_corners, set_no_focus, get_monitor_info
+from window_utils import resource_path, apply_rounded_corners, set_no_focus, get_monitor_info, set_startup, is_startup_enabled
 from audio_manager import AudioSwitcher
 from ui_components import ModernButton, ModernMenu, ToolTip
 
@@ -63,6 +63,10 @@ class App:
         
         self.root.after(100, self.dock_window)
         self.stop_threads = False
+        
+        # Default to True if the setting doesn't exist (First Run), otherwise respect user config
+        if self.settings.get("run_on_startup", True):
+            set_startup(True)
         
         try: keyboard.on_press(self.on_physical_keypress)
         except: pass
@@ -583,20 +587,33 @@ class App:
 
     def setup_context_menu(self):
         self.context_menu = tk.Menu(self.root, tearoff=0, bg=config.BG_COLOR, fg=config.TXT_COLOR)
+
         self.time_menu = tk.Menu(self.context_menu, tearoff=0, bg=config.BG_COLOR, fg=config.TXT_COLOR)
         self.time_menu.add_command(label="5 Seconds", command=lambda: self.set_timeout(5))
         self.time_menu.add_command(label="10 Seconds", command=lambda: self.set_timeout(10))
         self.time_menu.add_command(label="Never Auto-Hide", command=lambda: self.set_timeout(99999))
+
         self.hide_on_type_var = tk.BooleanVar(value=self.hide_on_type)
         self.always_default_dock_var = tk.BooleanVar(value=self.always_default_dock)
+
+        # --- NEW: Startup Variable ---
+        should_run = self.settings.get("run_on_startup", True)
+        self.run_startup_var = tk.BooleanVar(value=should_run)
+
+        def toggle_startup():
+            set_startup(self.run_startup_var.get())
+
         self.context_menu.add_checkbutton(label="Auto-Dock on Typing", variable=self.hide_on_type_var, command=self.update_preferences)
         self.context_menu.add_checkbutton(label="Always Dock to Top-Left", variable=self.always_default_dock_var, command=self.update_preferences)
         self.context_menu.add_separator()
+
         self.context_menu.add_cascade(label="Auto-Dock Timer", menu=self.time_menu)
         self.context_menu.add_command(label="Hide to Tray", command=self.hide_window)
+        self.context_menu.add_checkbutton(label="Run on Windows Startup", variable=self.run_startup_var, command=toggle_startup)
         self.context_menu.add_command(label="Reset Size", command=self.reset_size)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Quit", command=self.quit_app)
+
         self.root.bind("<Button-3>", lambda e: self.context_menu.tk_popup(e.x_root, e.y_root))
 
     def setup_tray(self):
@@ -631,9 +648,12 @@ class App:
 
     def save_config(self):
         if not self.is_docked: self.settings["geometry"] = self.root.geometry()
+        # Check current startup status to save it
+        current_startup_status = is_startup_enabled()
         self.settings.update({
             "timeout": self.timeout, "hide_on_type": self.hide_on_type,
-            "always_default_dock": self.always_default_dock, "last_dock_geo": self.last_dock_geo
+            "always_default_dock": self.always_default_dock, "last_dock_geo": self.last_dock_geo,
+            "run_on_startup": current_startup_status 
         })
         config.save_config_file(self.settings)
     
