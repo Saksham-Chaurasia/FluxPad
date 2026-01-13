@@ -13,6 +13,7 @@ import config
 from window_utils import resource_path, apply_rounded_corners, set_no_focus, get_monitor_info, set_startup, is_startup_enabled
 from audio_manager import AudioSwitcher
 from ui_components import ModernButton, ModernMenu, ToolTip
+from magnet_utils import check_magnet_snap
 
 class App:
     def __init__(self):
@@ -34,6 +35,8 @@ class App:
         self.caps_active = False
         self.letter_buttons = []
         self.settings = config.load_config()
+        # --- NEW: Ghost Window Variable ---
+        self.ghost_window = None
         # --- NEW: Track what is being typed ---
         self.current_text = "" 
         self.cursor_on = True
@@ -45,7 +48,24 @@ class App:
             self.numpad_wh = start_geo.split('+')[0] 
         except:
             self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
+        
+        # 1. Parse the Width and Height from the saved string
+        try:
+            wh_str = start_geo.split('+')[0]
+            w, h = map(int, wh_str.split('x'))
             
+            # 2. SAFETY CHECK: If saved size is tiny (like a dock), reset to Default
+            if w < 100 or h < 100:
+                print("Saved geometry too small (likely docked). Resetting to default.")
+                start_geo = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200"
+                self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
+            else:
+                self.numpad_wh = wh_str
+        except:
+            # If config is corrupted, use default
+            start_geo = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200"
+            self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
+
         self.keyboard_wh = "480x460" 
         self.timeout = self.settings.get("timeout", 5)
         self.hide_on_type = self.settings.get("hide_on_type", True) 
@@ -77,6 +97,8 @@ class App:
 
         threading.Thread(target=self.timer_loop, daemon=True).start()
         threading.Thread(target=self.setup_tray, daemon=True).start()
+        # Force a rebuild of the view to ensure grid is visible
+        self.root.after(50, lambda: self.toggle_input_view() if self.is_keyboard_view else self.build_numpad())
 
     def set_no_focus(self):
         hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
@@ -132,7 +154,7 @@ class App:
                     return ImageTk.PhotoImage(img)
                 except: return None
             
-            # ... (Your existing image loading code here) ...
+            # ... image loading code here ...
             self.play_icon_img = load_and_process("icon/play.png")
             self.pause_icon_img = load_and_process("icon/pause.png")
             self.vol_down_img = load_and_process("icon/volumedown.png")
@@ -523,6 +545,8 @@ class App:
             time.sleep(0.5)
 
     def dock_window(self, animate=True):
+        self.current_text = ""
+        self.update_display()
         if not self.is_docked:
             if self.root.winfo_width() > 100: self.saved_geometry = self.root.geometry()
         mon = get_monitor_info(self.root.winfo_id())
@@ -606,16 +630,112 @@ class App:
             self.root.after(10, lambda: step(i+1))
         step(0)
 
+    def update_ghost_dock(self, x, y, w, h):
+        """ Creates or updates a semi-transparent, rounded preview window """
+        # 1. Create the window if it doesn't exist yet
+        if self.ghost_window is None:
+            self.ghost_window = tk.Toplevel(self.root)
+            # Basic setup for a floating tool window
+            self.ghost_window.overrideredirect(True)
+            self.ghost_window.attributes("-topmost", True)
+            self.ghost_window.attributes("-toolwindow", True)
+            
+            # --- NEW DESIGN: Dark, Glossy, Curved ---
+            self.ghost_window.configure(bg="#101010") # Dark background
+            self.ghost_window.attributes("-alpha", 0.5) # 50% opacity
+
+            # Force an update so the window exists in the OS before we apply corners
+            self.ghost_window.update_idletasks() 
+            try:
+                # Get HWND and apply rounded corners
+                hwnd = ctypes.windll.user32.GetParent(self.ghost_window.winfo_id())
+                apply_rounded_corners(hwnd) 
+            except: pass
+            # ----------------------------------------
+
+        # 2. Update position and size safely
+        w, h, x, y = max(1, int(w)), max(1, int(h)), int(x), int(y)
+        target_geo = f"{w}x{h}+{x}+{y}"
+        
+        # Only update if geometry changed to prevent flickering
+        if self.ghost_window.geometry().split('+')[0] != f"{w}x{h}":
+             self.ghost_window.geometry(target_geo)
+             # Re-apply corners after a significant resize just in case
+             self.ghost_window.update_idletasks()
+             try:
+                 hwnd = ctypes.windll.user32.GetParent(self.ghost_window.winfo_id())
+                 apply_rounded_corners(hwnd)
+             except: pass
+        else:
+             self.ghost_window.geometry(f"+{x}+{y}")
+
+    def hide_ghost_dock(self):
+        """ Destroys the preview window """
+        if self.ghost_window:
+            self.ghost_window.destroy()
+            self.ghost_window = None
+
     def start_move(self, e): self.dx, self.dy = e.x, e.y; self.drag_start_x = self.root.winfo_x(); self.drag_start_y = self.root.winfo_y()
-    def do_move(self, e): self.root.geometry(f"+{self.root.winfo_x() + e.x - self.dx}+{self.root.winfo_y() + e.y - self.dy}")
-    def stop_move(self, e):
-        if ((self.root.winfo_x()-self.drag_start_x)**2 + (self.root.winfo_y()-self.drag_start_y)**2)**0.5 < 5: return
+    def do_move(self, e):
+        # 1. Move the actual window
+        new_x = self.root.winfo_x() + e.x - self.dx
+        new_y = self.root.winfo_y() + e.y - self.dy
+        self.root.geometry(f"+{new_x}+{new_y}")
+        
+        # 2. Monitor Info
         mon = get_monitor_info(self.root.winfo_id())
         if not mon: mon = {'l': 0, 't': 0, 'r': self.root.winfo_screenwidth(), 'b': self.root.winfo_screenheight()}
+        
+        # 3. Check Edges for Ghost Preview
+        # Using a large threshold (100px) so the preview appears early
+        threshold = 100 
+        
+        # --- SIZES UPDATED TO BE SMALLER (16 and 64) ---
+        # Check Left
+        if new_x < mon['l'] + threshold:
+            # Show vertical ghost strip on the left (Smaller size: 16x64)
+            self.update_ghost_dock(mon['l'], new_y, 16, 64)
+            
+        # Check Right
+        elif new_x > mon['r'] - threshold - self.root.winfo_width():
+            # Show vertical ghost strip on the right (Smaller size: 16x64)
+            self.update_ghost_dock(mon['r'] - 16, new_y, 16, 64)
+            
+        # Check Top
+        elif new_y < mon['t'] + threshold:
+            # Show horizontal ghost strip on the top (Smaller size: 64x16)
+            self.update_ghost_dock(new_x, mon['t'], 64, 16)
+            
+        else:
+            # Not near any edge -> Hide Ghost
+            self.hide_ghost_dock()
+            
+    def stop_move(self, e):
+        # 1. Always hide the ghost immediately on release
+        self.hide_ghost_dock()
+
+        # 2. Check if it was a click (not a drag)
+        if ((self.root.winfo_x()-self.drag_start_x)**2 + (self.root.winfo_y()-self.drag_start_y)**2)**0.5 < 5: 
+            return
+
+        mon = get_monitor_info(self.root.winfo_id())
+        if not mon: mon = {'l': 0, 't': 0, 'r': self.root.winfo_screenwidth(), 'b': self.root.winfo_screenheight()}
+        
         x, y = self.root.winfo_x(), self.root.winfo_y()
-        if x < mon['l']+config.SNAP_THRESHOLD or x > mon['r']-config.SNAP_THRESHOLD or y < mon['t']+config.SNAP_THRESHOLD: 
-            self.last_dock_geo = None; self.dock_window()
-        else: self.save_config()
+        w = self.root.winfo_width()
+        
+        # 3. Perform the actual docking logic (matches the visual ghost)
+        threshold = config.SNAP_THRESHOLD # Keep your config threshold for the actual snap
+        
+        if x < mon['l'] + threshold:
+            self.set_dock('left', mon['l'], y)
+        elif x > mon['r'] - threshold - w:
+            self.set_dock('right', mon['r'], y)
+        elif y < mon['t'] + threshold:
+            self.set_dock('top', x, mon['t'])
+        else:
+            self.last_dock_geo = None
+            self.save_config()
 
     def start_resize(self, e):
         self.resize_start_x = e.x_root; self.resize_start_y = e.y_root
@@ -645,7 +765,6 @@ class App:
         self.hide_on_type_var = tk.BooleanVar(value=self.hide_on_type)
         self.always_default_dock_var = tk.BooleanVar(value=self.always_default_dock)
 
-        # --- NEW: Startup Variable ---
         should_run = self.settings.get("run_on_startup", True)
         self.run_startup_var = tk.BooleanVar(value=should_run)
 
@@ -663,7 +782,18 @@ class App:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Quit", command=self.quit_app)
 
-        self.root.bind("<Button-3>", lambda e: self.context_menu.tk_popup(e.x_root, e.y_root))
+        # --- FIX: SIMPLIFIED & ROBUST LOGIC ---
+        def show_menu(e):
+            # 1. Force the OS to give focus to FloatPad immediately.
+            # 'focus_force' is stronger than 'focus_set' and crucial for frameless windows.
+            self.root.focus_force()
+            
+            # 2. Open the menu. 
+            # We removed 'unpost' and 'grab_release' because tk_popup handles them.
+            # Manually calling them was causing the "Second Click" bug.
+            self.context_menu.tk_popup(e.x_root, e.y_root)
+        
+        self.root.bind("<Button-3>", show_menu)
 
     def setup_tray(self):
         menu = TrayMenu(TrayItem('Show', self.show_from_tray, default=True), 
