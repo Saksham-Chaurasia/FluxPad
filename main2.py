@@ -23,13 +23,6 @@ class App:
         self.root.title("FloatPad")
         self.root.configure(bg=config.BG_COLOR)
         self.audio_switcher = AudioSwitcher()
-
-        # --- CONSTANTS FOR SMOOTH EXPANSION ---
-        self.COMPACT_HEIGHT = 100  # Only Media + Text Box visible
-        self.FULL_HEIGHT = 460     # Full Numpad/Keyboard visible
-        self.is_expanded = False   # Tracks current state
-        self.collapse_job = None   # For canceling the auto-close timer
-        # --------------------------------------
         
         self.is_docked = False
         self.is_animating = False
@@ -62,20 +55,26 @@ class App:
         
         # --- MEMORY FOR WINDOW SIZES ---
         start_geo = self.settings.get("geometry", f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200")
-        # Force width but keep height flexible based on mode
+        try:
+            self.numpad_wh = start_geo.split('+')[0] 
+        except:
+            self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
+        
         try:
             wh_str = start_geo.split('+')[0]
             w, h = map(int, wh_str.split('x'))
-            if w < 100: w = config.DEFAULT_WIDTH # Safety check
-            
-            # START IN COMPACT MODE
-            self.root.geometry(f"{w}x{self.COMPACT_HEIGHT}+{start_geo.split('+')[1]}+{start_geo.split('+')[2]}")
+            if w < 100 or h < 100:
+                start_geo = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200"
+                self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
+            else:
+                self.numpad_wh = wh_str
         except:
-            self.root.geometry(f"{config.DEFAULT_WIDTH}x{self.COMPACT_HEIGHT}+500+200")
+            start_geo = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200"
+            self.numpad_wh = f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}"
 
         self.keyboard_wh = "480x460" 
-        self.timeout = self.settings.get("timeout", 10)
-        self.hide_on_type = self.settings.get("hide_on_type", False) 
+        self.timeout = self.settings.get("timeout", 5)
+        self.hide_on_type = self.settings.get("hide_on_type", True) 
         self.always_default_dock = self.settings.get("always_default_dock", False)
         self.last_dock_geo = self.settings.get("last_dock_geo", None)
         
@@ -90,7 +89,6 @@ class App:
         self.setup_ui()
         self.setup_dock_ui()
         self.setup_context_menu()
-        self.setup_hover_logic()
         
         self.root.after(100, self.dock_window)
         
@@ -256,89 +254,22 @@ class App:
         self.keys_container.pack(side="top", expand=True, fill="both")
         self.build_numpad()
 
-        # --- B. Display Area (Middle, Always Visible) ---
-        # This acts as the visual "Anchor" for the input area
+        # --- GHOST DISPLAY AT BOTTOM (So it grows downwards) ---
         self.display_frame = tk.Frame(content, bg="#1e1e1e", height=35)
-        self.display_frame.pack(side="top", fill="x", pady=(0, 8))
         self.display_frame.pack_propagate(False)
         self.display_frame.configure(highlightbackground="#333333", highlightthickness=1)
         self.display_font = tkfont.Font(family="Consolas", size=14)
         
         self.cursor_label = tk.Label(self.display_frame, text="|", bg="#1e1e1e", fg="white", font=("Consolas", 14), anchor='w')
         self.cursor_label.pack(side="left", fill='x', expand=True, padx=8)
+        
         self.blink_cursor()
-
-        # --- C. Keys (Bottom, Hidden Initially via Clipping) ---
-        # We pack it, but because the window height is small (COMPACT_H), this part gets cut off.
-        self.keys_container = tk.Frame(content, bg=config.BG_COLOR)
-        self.keys_container.pack(side="top", expand=True, fill="both")
-        self.build_numpad()
+        # --------------------------------
 
         def get_play_btn_text(): return "Pause" if self.is_playing else "Play"
         if hasattr(self, 'play_btn'): self.play_tooltip = ToolTip(self.play_btn, get_play_btn_text)
         self.root.bind("<MouseWheel>", self.on_mouse_scroll)
         self.root.bind("<Button-2>", self.on_middle_click)
-
-
-    # --- NEW: HOVER EXPANSION LOGIC ---
-    def setup_hover_logic(self):
-        """ Binds mouse enter/leave to expand/collapse the window """
-        self.main_frame.bind("<Enter>", self.on_mouse_enter)
-        self.main_frame.bind("<Leave>", self.on_mouse_leave)
-        
-        # Bind key widgets too to prevent flickering
-        self.root.bind("<Enter>", self.on_mouse_enter)
-
-    def on_mouse_enter(self, event):
-        if self.is_docked: return
-        if self.collapse_job:
-            self.root.after_cancel(self.collapse_job)
-            self.collapse_job = None
-        
-        if not self.is_expanded:
-            self.animate_height_to(self.FULL_HEIGHT)
-            self.is_expanded = True
-
-    def on_mouse_leave(self, event):
-        if self.is_docked: return
-        # Don't collapse immediately. Wait 0.8s to see if user comes back.
-        self.collapse_job = self.root.after(800, self._do_collapse)
-
-    def _do_collapse(self):
-        # Don't collapse if user is actively typing (optional logic, kept simple for now)
-        if self.is_expanded:
-            self.animate_height_to(self.COMPACT_HEIGHT)
-            self.is_expanded = False
-
-    def animate_height_to(self, target_h):
-        """ Smoothly interpolates window height using Cubic Ease-Out """
-        try:
-            start_h = self.root.winfo_height()
-            w = self.root.winfo_width()
-            x = self.root.winfo_x()
-            y = self.root.winfo_y()
-        except: return
-
-        if start_h == target_h: return
-
-        steps = 15  
-        dt = 12     
-        
-        def _step(i):
-            if i > steps:
-                self.root.geometry(f"{w}x{target_h}+{x}+{y}")
-                return
-            
-            progress = i / steps
-            ease = 1 - pow(1 - progress, 3) # Cubic Ease Out
-            curr_h = int(start_h + (target_h - start_h) * ease)
-            
-            self.root.geometry(f"{w}x{curr_h}+{x}+{y}")
-            self.root.update_idletasks()
-            self.root.after(dt, lambda: _step(i + 1))
-            
-        _step(0)
-    # ----------------------------------
 
     # --- STEP 2: CONTEXT AWARENESS HELPERS ---
     def get_active_window_title(self):
@@ -739,20 +670,23 @@ class App:
                     if self.timeout < 9000: self.root.after(0, self.dock_window)
             time.sleep(0.5)
 
-    
     def dock_window(self, animate=True, force_mode=None, force_x=None, force_y=None):
         self.current_text = ""
         self.update_display()
-        if self.is_expanded:
-            self.is_expanded = False # Reset expansion state
+        
+        # Reset Ghost Display
+        if self.display_visible:
+            self.display_frame.pack_forget()
+            self.display_visible = False
         
         if not self.is_docked:
             if self.root.winfo_width() > 100: self.saved_geometry = self.root.geometry()
             
-        # Use forced coordinates if provided (Magnet Snap)
+        # --- NEW LOGIC: Use forced coordinates if provided (Magnet Snap) ---
         if force_mode and force_x is not None and force_y is not None:
             self.set_dock(force_mode, force_x, force_y, animate=animate)
             return
+        # -----------------------------------------------------------------
 
         mon = get_monitor_info(self.root.winfo_id())
         if not mon: mon = {'l': 0, 't': 0, 'r': self.root.winfo_screenwidth(), 'b': self.root.winfo_screenheight()}
@@ -776,7 +710,6 @@ class App:
             elif md == dl: mode, target_x, target_y = 'left', mon['l'], my
             else: mode, target_x, target_y = 'right', mon['r'], my
         self.set_dock(mode, target_x, target_y, animate=animate)
-    
 
     def set_dock(self, mode, x, y, animate=True):
         self.is_docked = True
@@ -804,19 +737,8 @@ class App:
         self.is_docked = False
         self.dock_frame.pack_forget()
         self.main_frame.pack(fill='both', expand=True)
-        # Restore to compact mode
-        w = config.DEFAULT_WIDTH
-        h = self.COMPACT_HEIGHT
-        
-        # Try to parse saved location but force size
-        try:
-            parts = self.saved_geometry.split('+')
-            x, y = parts[1], parts[2]
-            target_geo = f"{w}x{h}+{x}+{y}"
-        except:
-            target_geo = f"{w}x{h}+500+200"
-            
-        self.animate(self.root.geometry(), target_geo)
+        geo = self.saved_geometry if self.saved_geometry else f"{config.DEFAULT_WIDTH}x{config.DEFAULT_HEIGHT}+500+200"
+        self.animate(self.root.geometry(), geo)
         self.last_interaction = time.time()
 
     def animate_resize(self, target_w, target_h):
